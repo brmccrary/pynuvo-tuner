@@ -866,13 +866,14 @@ def get_nuvo(port_url, baud, conf_track):
             # Refresh Sirius channel list every 24h and when band first avail
             time24hago = time.time() - 86400
             if 'SR' in tuner_a_bands and time24hago > tuner_a_sr_chlist_setup \
-                    and tuner == 'A' and tuner_a_init == 3 and \
+                    and tuner == 'A' and tuner_a_init >= 3 and \
                     tunerpwrontime < (time.time() - 180):
                 tuner_a_sr_chlist_setup = time.time()
                 self._process_request(_format_sr_chlist_request(tuner))
-            if 'SR' in tuner_b_bands and time24hago > tuner_a_sr_chlist_setup \
-                    and tuner == 'B' and tuner_b_init == 3:
-                tuner_b_sr_chlist_setup = True
+            if 'SR' in tuner_b_bands and time24hago > tuner_b_sr_chlist_setup \
+                    and tuner == 'B' and tuner_b_init >= 3 and \
+                    tunerpwrontime < (time.time() - 180):
+                tuner_b_sr_chlist_setup = time.time()
                 self._process_request(_format_sr_chlist_request(tuner))
 
             if tunerpwr == True:
