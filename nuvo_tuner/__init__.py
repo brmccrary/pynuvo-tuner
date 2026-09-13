@@ -48,7 +48,7 @@ SRLIST_PATTERN = re.compile(r'T\\\'(?P<tuner>A|B).+'
                  '_LISTSR(?P<freq>[0-9.]+),.+,(?P<channel>.+)\'')
 
 # #?
-ERROR_PATTERN = re.compile('\?')
+ERROR_PATTERN = re.compile(r'\?')
 
 EOL = b'\r'
 TIMEOUT_RESPONSE = 1     # Number of seconds before command response timeout
@@ -959,20 +959,42 @@ def get_nuvo(port_url, baud, conf_track):
 
         @synchronized
         def set_source(self, tuner: str, source: str):
+            if tuner == 'A':
+                source_list = tuner_a_source_list
+                source_ch = tuner_a_source_ch
+            elif tuner == 'B':
+                source_list = tuner_b_source_list
+                source_ch = tuner_b_source_ch
+            else:
+                _LOGGER.error('Unknown tuner %s', tuner)
+                return
+
+            # The source list is rebuilt (and rebound) as each SiriusXM channel
+            # arrives, so a consumer holding an older, longer copy - Home Assistant
+            # caches it as the entity's source_list - can ask for a channel that is
+            # not in the current list yet. Say so plainly: this used to be reported
+            # as "Can not process source list", which sent people looking at the
+            # serial port instead of at a half-loaded channel lineup.
             try:
-                if tuner == 'A':
-                    sourceindexobj = [i for i, x in enumerate(tuner_a_source_list) \
-                                     if x == source]
-                    sourceindex = int(sourceindexobj[0])
-                    tunecmd = "T\'A\'" + tuner_a_source_ch[sourceindex]
-                elif tuner == 'B':
-                    sourceindexobj = [i for i, x in enumerate(tuner_b_source_list) \
-                                     if x == source]
-                    sourceindex = int(sourceindexobj[0])
-                    tunecmd = "T\'B\'" + tuner_b_source_ch[sourceindex]
-                self._send_request(tunecmd)
-            except:
-                _LOGGER.error('Can not process source list for tuner %s', tuner)
+                sourceindex = source_list.index(source)
+            except ValueError:
+                _LOGGER.error(
+                    'Source %r is not in the tuner %s source list (%d entries). '
+                    'If it is a SiriusXM channel the lineup is probably still '
+                    'loading - reload the tuner config and try again.',
+                    source, tuner, len(source_list)
+                )
+                return
+
+            if sourceindex >= len(source_ch):
+                _LOGGER.error(
+                    'Tuner %s channel list is out of sync with its source list '
+                    '(%d channels for %d sources); cannot tune %r',
+                    tuner, len(source_ch), len(source_list), source
+                )
+                return
+
+            self._send_request("T\'" + tuner + "\'" + source_ch[sourceindex])
 
         @synchronized
         def reload_config(self, tuner: str):
@@ -980,14 +1002,18 @@ def get_nuvo(port_url, baud, conf_track):
             global tuner_b_sr_chlist_setup
             global tuner_a_sr_chlist
             global tuner_b_sr_chlist
-            global tuner_a_sr_chname
-            global tuner_b_sr_chname
+            # These are the channel-NAME lists that pair with tuner_?_sr_chlist.
+            # They were previously cleared under the names tuner_?_sr_chname, which
+            # exist nowhere else in the module - so the reset silently created two
+            # throwaway globals and left the real name lists populated.
+            global tuner_a_sr_name
+            global tuner_b_sr_name
             tuner_a_sr_chlist_setup = 0
             tuner_b_sr_chlist_setup = 0
             tuner_a_sr_chlist = []
             tuner_b_sr_chlist = []
-            tuner_a_sr_chname = []
-            tuner_b_sr_chname = []
+            tuner_a_sr_name = []
+            tuner_b_sr_name = []
             self._process_request(_format_tuner_config_request(tuner))
             PresetLists()
             SourceLists()
