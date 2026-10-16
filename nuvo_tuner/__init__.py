@@ -93,6 +93,9 @@ tuner_b_freq = 0
 tuner_a_band = 'UNK'
 tuner_b_band = 'UNK'
 read_config = False
+# Seconds of silence after which an unfinished config dump is abandoned.
+CONFIG_QUIET_TIMEOUT = 2
+config_retries_left = 0
 
 class TunerStatus(object):
     def __init__(self
@@ -637,8 +640,25 @@ def _format_tuner_bands_request(tuner: str) -> str:
 
 def _format_tuner_config_request(tuner: str) -> str:
     global read_config
+    global config_retries_left
     read_config = True
+    # Each fresh dump request gets one retry if the dump arrives short
+    config_retries_left = 1
     return "_CFG1".format(tuner)
+
+def _write_config_request() -> bool:
+    """Send *_CFG1 and the ACKs the tuner paces its config dump with."""
+    try:
+        port.write("*_CFG1\r".encode())
+        ackcount = 0
+        while ackcount < 30:
+            time.sleep(0.1)
+            port.write("\x06".encode())
+            ackcount += 1
+    except:
+        _LOGGER.error('Unexpected port error when sending command.')
+        return False
+    return True
 
 def _format_sr_chlist_request(tuner: str) -> str:
     return "T\'{}\'_LISTSR".format(tuner)
@@ -737,17 +757,7 @@ def get_nuvo(port_url, baud, conf_track):
             lineout = "*" + request + "\r"
             _LOGGER.debug('Sending "%s"', request)
             if request == "_CFG1":
-                try:
-                    port.write(lineout.encode())
-                    ackcount = 0
-                    while ackcount < 30:
-                        time.sleep(0.1)
-                        lineout = "\x06"
-                        port.write(lineout.encode())
-                        ackcount += 1
-                except:
-                    _LOGGER.error('Unexpected port error when sending command.')
-                    return False
+                return _write_config_request()
             else:
                 try:
                     port.write(lineout.encode())
@@ -771,6 +781,7 @@ def get_nuvo(port_url, baud, conf_track):
                 global listen_init
                 global port
                 global read_config
+                global config_retries_left
                 global config_data_1
                 global config_data_2
                 try:
@@ -779,6 +790,9 @@ def get_nuvo(port_url, baud, conf_track):
                     port.stopbits = serial.STOPBITS_ONE
                     port.bytesize = serial.EIGHTBITS
                     port.parity = serial.PARITY_NONE
+                    # Return from read() after 1 s of silence so a stalled
+                    # config dump can be detected below.
+                    port.timeout = 1
                     port.open()
                 except:
                     if listen_init == 1:
@@ -787,14 +801,39 @@ def get_nuvo(port_url, baud, conf_track):
                 no_data = False
                 receive_buffer = b''
                 message = b''
+                configpos = 0
+                config_last_byte = 0
                 listen_init = 0
                 try:
                     while (no_data == False):
                     # fill buffer until we get term seperator
                        data = port.read(1)
+                       if not data and read_config:
+                           # The config dump is a fixed 8220 bytes. If bytes get
+                           # dropped on the way (e.g. through a network serial
+                           # proxy) the count never completes, and staying in
+                           # config mode would swallow every later reply. Give up
+                           # on the dump after a quiet gap instead.
+                           if config_last_byte == 0:
+                               config_last_byte = time.monotonic()
+                           elif time.monotonic() - config_last_byte > CONFIG_QUIET_TIMEOUT:
+                               receive_buffer = b''
+                               if config_retries_left > 0:
+                                   config_retries_left -= 1
+                                   _LOGGER.warning('Config dump incomplete (%s of 8220 bytes); retrying', configpos)
+                                   # Send from another thread: the request paces the
+                                   # dump with ACKs for ~3 s while this loop reads it.
+                                   threading.Thread(target=_write_config_request, daemon=True).start()
+                               else:
+                                   _LOGGER.warning('Config dump incomplete (%s of 8220 bytes); '
+                                                   'presets not loaded, resuming normal status', configpos)
+                                   read_config = False
+                               configpos = 0
+                               config_last_byte = 0
                        if data:
                            receive_buffer += data
                            if read_config:
+                               config_last_byte = time.monotonic()
                                if configpos == 0:
                                    receive_buffer = data
                                configpos += 1
