@@ -1,7 +1,7 @@
 # pynuvo-tuner
 Python library for controlling Nuvo tuners (NV-T2SIR) via RS-232.
 
-Used by the [nuvo_tuner](https://github.com/brmccrary/nuvo_tuner) Home Assistant integration.
+> **No longer maintained.** The driver now ships inside the [nuvo_tuner](https://github.com/brmccrary/nuvo_tuner) Home Assistant integration (1.2.0 and later), which no longer uses this library. The `nuvo-tuner` package stays on PyPI for older versions of the integration.
 
 ## Install
 
